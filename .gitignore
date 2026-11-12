@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+.env
+.env.*
+*.pem
+*.ppk
+*.p8
+*.key
+*.dpapi
+delivery.json
+node_modules/
+test-results/
