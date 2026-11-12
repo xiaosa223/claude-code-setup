@@ -47,7 +47,16 @@ function Set-PrivateAcl([string]$Path) {
 
 function Initialize-PrivateRoot([string]$Root) {
     if (-not (Test-Path -LiteralPath $Root)) {
-        New-Item -ItemType Directory -Path $Root -ErrorAction Stop | Out-Null
+        $sid = [Security.Principal.WindowsIdentity]::GetCurrent().User
+        $security = New-Object Security.AccessControl.DirectorySecurity
+        $security.SetOwner($sid)
+        $security.SetAccessRuleProtection($true, $false)
+        $security.AddAccessRule((New-Object Security.AccessControl.FileSystemAccessRule($sid, 'FullControl', 'ContainerInherit,ObjectInherit', 'None', 'Allow')))
+        if ($PSVersionTable.PSEdition -eq 'Core') {
+            [IO.FileSystemAclExtensions]::CreateDirectory($security, $Root) | Out-Null
+        } else {
+            [IO.Directory]::CreateDirectory($Root, $security) | Out-Null
+        }
     }
     Assert-PlainDirectory $Root
     Set-PrivateAcl $Root
@@ -64,7 +73,22 @@ function Write-PrivateText([string]$Path, [string]$Text) {
     }
     $temp = Join-Path $parent ([guid]::NewGuid().ToString('N') + '.tmp')
     try {
-        [IO.File]::WriteAllText($temp, $Text, (New-Object Text.UTF8Encoding($true)))
+        $sid = [Security.Principal.WindowsIdentity]::GetCurrent().User
+        $security = New-Object Security.AccessControl.FileSecurity
+        $security.SetOwner($sid)
+        $security.SetAccessRuleProtection($true, $false)
+        $security.AddAccessRule((New-Object Security.AccessControl.FileSystemAccessRule($sid, 'FullControl', 'Allow')))
+        if ($PSVersionTable.PSEdition -eq 'Core') {
+            $stream = [IO.FileSystemAclExtensions]::Create((New-Object IO.FileInfo($temp)), [IO.FileMode]::CreateNew, [Security.AccessControl.FileSystemRights]::Write, [IO.FileShare]::None, 4096, [IO.FileOptions]::WriteThrough, $security)
+        } else {
+            $stream = New-Object IO.FileStream($temp, [IO.FileMode]::CreateNew, [Security.AccessControl.FileSystemRights]::Write, [IO.FileShare]::None, 4096, [IO.FileOptions]::WriteThrough, $security)
+        }
+        try {
+            $encoding = New-Object Text.UTF8Encoding($true)
+            [byte[]]$bytes = $encoding.GetPreamble() + $encoding.GetBytes($Text)
+            $stream.Write($bytes, 0, $bytes.Length)
+            $stream.Flush($true)
+        } finally { $stream.Dispose() }
         Set-PrivateAcl $temp
         if (Test-Path -LiteralPath $Path) {
             [IO.File]::Replace($temp, $Path, [System.Management.Automation.Language.NullString]::Value)
@@ -288,12 +312,9 @@ function Invoke-ClaudeEnvironment($Config, [Security.SecureString]$Token, [scrip
 function Install-Wizard([string]$Root, [string]$PackageRoot, [string]$DesktopPath) {
     Initialize-PrivateRoot $Root
     $app = Join-Path $Root 'app'
-    if (-not (Test-Path -LiteralPath $app)) { New-Item -ItemType Directory -Path $app | Out-Null }
-    Assert-PlainDirectory $app
-    Set-PrivateAcl $app
+    Initialize-PrivateRoot $app
     $scripts = Join-Path $app 'scripts'
-    if (-not (Test-Path -LiteralPath $scripts)) { New-Item -ItemType Directory -Path $scripts | Out-Null }
-    Assert-PlainDirectory $scripts
+    Initialize-PrivateRoot $scripts
     foreach ($name in @('Core.ps1', 'Setup.ps1', 'Launch.ps1', 'Doctor.ps1')) {
         $source = Join-Path (Join-Path $PackageRoot 'scripts') $name
         $target = Join-Path $scripts $name

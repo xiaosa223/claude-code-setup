@@ -22,6 +22,7 @@ try {
     Assert (Test-Path -LiteralPath $temp) 'private state created'
     $sid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
     $acl = Get-Acl -LiteralPath $temp
+    Assert ($acl.GetOwner([Security.Principal.SecurityIdentifier]).Value -eq $sid) 'new private root belongs to current user'
     $rules = @($acl.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier]))
     Assert ($acl.AreAccessRulesProtected -and $rules.Count -eq 1 -and $rules[0].IdentityReference.Value -eq $sid) 'exclusive current-user ACL'
 
