@@ -114,9 +114,8 @@ try {
     $app = Install-Wizard $temp $packageRoot $desktop
     Assert ((Get-ChildItem -LiteralPath $desktop -Filter '*.lnk').Count -eq 3) 'three shortcuts created in isolated desktop'
     Assert (Test-Path -LiteralPath (Join-Path $app 'scripts\Core.ps1')) 'runtime copied outside original package'
-    $shell = New-Object -ComObject WScript.Shell
     foreach ($link in Get-ChildItem -LiteralPath $desktop -Filter '*.lnk') {
-        Assert ($shell.CreateShortcut($link.FullName).TargetPath.StartsWith($app)) 'shortcut points to managed runtime'
+        Assert ([ClaudeCodeSetup.Shortcuts]::ReadTarget($link.FullName).StartsWith($app)) 'Unicode shortcut points to managed runtime'
     }
     Install-Wizard $temp $packageRoot $desktop | Out-Null
     Assert ($true) 'reconfiguration can safely replace own runtime and shortcuts'

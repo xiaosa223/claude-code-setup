@@ -309,6 +309,63 @@ function Invoke-ClaudeEnvironment($Config, [Security.SecureString]$Token, [scrip
     }
 }
 
+function Initialize-ShortcutApi {
+    if ('ClaudeCodeSetup.Shortcuts' -as [type]) { return }
+    Add-Type -TypeDefinition @'
+using System;
+using System.IO;
+using System.Text;
+using System.Runtime.InteropServices;
+using System.Runtime.InteropServices.ComTypes;
+namespace ClaudeCodeSetup {
+    [ComImport, Guid("00021401-0000-0000-C000-000000000046")]
+    internal class ShellLinkObject { }
+    [ComImport, InterfaceType(ComInterfaceType.InterfaceIsIUnknown), Guid("000214F9-0000-0000-C000-000000000046")]
+    internal interface IShellLinkW {
+        void GetPath([Out, MarshalAs(UnmanagedType.LPWStr)] StringBuilder path, int count, IntPtr findData, uint flags);
+        void GetIDList(out IntPtr list);
+        void SetIDList(IntPtr list);
+        void GetDescription([Out, MarshalAs(UnmanagedType.LPWStr)] StringBuilder text, int count);
+        void SetDescription([MarshalAs(UnmanagedType.LPWStr)] string text);
+        void GetWorkingDirectory([Out, MarshalAs(UnmanagedType.LPWStr)] StringBuilder path, int count);
+        void SetWorkingDirectory([MarshalAs(UnmanagedType.LPWStr)] string path);
+        void GetArguments([Out, MarshalAs(UnmanagedType.LPWStr)] StringBuilder arguments, int count);
+        void SetArguments([MarshalAs(UnmanagedType.LPWStr)] string arguments);
+        void GetHotkey(out short hotkey);
+        void SetHotkey(short hotkey);
+        void GetShowCmd(out int command);
+        void SetShowCmd(int command);
+        void GetIconLocation([Out, MarshalAs(UnmanagedType.LPWStr)] StringBuilder path, int count, out int index);
+        void SetIconLocation([MarshalAs(UnmanagedType.LPWStr)] string path, int index);
+        void SetRelativePath([MarshalAs(UnmanagedType.LPWStr)] string path, uint reserved);
+        void Resolve(IntPtr window, uint flags);
+        void SetPath([MarshalAs(UnmanagedType.LPWStr)] string path);
+    }
+    public static class Shortcuts {
+        public static string ReadTarget(string path) {
+            object link = new ShellLinkObject();
+            try {
+                ((IPersistFile)link).Load(path, 0);
+                var target = new StringBuilder(32768);
+                ((IShellLinkW)link).GetPath(target, target.Capacity, IntPtr.Zero, 4);
+                return target.ToString();
+            } finally { Marshal.FinalReleaseComObject(link); }
+        }
+        public static void Save(string path, string target, string workingDirectory) {
+            if (File.Exists(path) && !String.Equals(ReadTarget(path), target, StringComparison.OrdinalIgnoreCase))
+                throw new IOException("A shortcut with a different target already exists; it was preserved.");
+            object link = new ShellLinkObject();
+            try {
+                ((IShellLinkW)link).SetPath(target);
+                ((IShellLinkW)link).SetWorkingDirectory(workingDirectory);
+                ((IPersistFile)link).Save(path, true);
+            } finally { Marshal.FinalReleaseComObject(link); }
+        }
+    }
+}
+'@
+}
+
 function Install-Wizard([string]$Root, [string]$PackageRoot, [string]$DesktopPath) {
     Initialize-PrivateRoot $Root
     $app = Join-Path $Root 'app'
@@ -333,16 +390,10 @@ function Install-Wizard([string]$Root, [string]$PackageRoot, [string]$DesktopPat
     $desktop = $DesktopPath
     if (-not $desktop) { $desktop = [Environment]::GetFolderPath('Desktop') }
     if (-not $desktop -or -not (Test-Path -LiteralPath $desktop)) { throw '无法找到桌面，配置已保存；可以从应用目录启动。' }
-    $shell = New-Object -ComObject WScript.Shell
+    Initialize-ShortcutApi
     foreach ($entry in @(@('启动 Claude Code.lnk', 'StartClaude.cmd'), @('检查 Claude 环境.lnk', 'CheckEnvironment.cmd'), @('重新配置 Claude.lnk', 'Configure.cmd'))) {
         $linkPath = Join-Path $desktop $entry[0]
-        $link = $shell.CreateShortcut($linkPath)
-        if ((Test-Path -LiteralPath $linkPath) -and $link.TargetPath -ne (Join-Path $app $entry[1])) {
-            throw '桌面存在同名的其他快捷方式，已保留。请重命名后重试；应用目录内仍可启动。'
-        }
-        $link.TargetPath = Join-Path $app $entry[1]
-        $link.WorkingDirectory = $env:USERPROFILE
-        $link.Save()
+        [ClaudeCodeSetup.Shortcuts]::Save($linkPath, (Join-Path $app $entry[1]), $env:USERPROFILE)
     }
     return $app
 }
